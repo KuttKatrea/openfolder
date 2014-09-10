@@ -177,7 +177,7 @@ class OpenFolderOpenSettings(sublime_plugin.WindowCommand):
         settingsFilePieces = self.getSettingPieces(scope)
 
         self.window.run_command("open_file", {
-            "file": "${packages}/{0}/{1}" % settingsFilePieces
+            "file": "${packages}/%0s/%1s" % settingsFilePieces
         })
 
     def getSettingPieces(self, scope):
