@@ -2,7 +2,14 @@ import sublime
 import sublime_plugin
 import subprocess
 import os
+import os.path
 import platform
+
+# Patch for ST2
+# Works because ST2 unpacks the plugins before running them
+if __package__ is None:
+    __package__ = os.path.basename(os.getcwd())
+
 
 class OpenFolderClassicCommand(object):
     def __init__(self, window, cmdline):
@@ -15,8 +22,12 @@ class OpenFolderClassicCommand(object):
     def runForFile(self, filePath):
         self.window.run_command(
             "open_dir",
-            {"dir": os.path.dirname(filePath), "file": os.path.basename(filePath)}
+            {
+                "dir": os.path.dirname(filePath),
+                "file": os.path.basename(filePath)
+            }
         )
+
 
 class OpenFolderCommand(object):
     def __init__(self, window, folder_command, file_command):
@@ -30,7 +41,11 @@ class OpenFolderCommand(object):
         if self.folder_command is None:
             raise RuntimeError('There are not commands configurated')
         else:
-            self.execute(self.folder_command['command'], pieces, bool(self.folder_command['use_shell']) if 'use_shell' in self.folder_command else False)
+            use_shell = False
+            if 'use_shell' in self.folder_command:
+                use_shell = bool(self.folder_command['use_shell'])
+
+            self.execute(self.folder_command['command'], pieces, use_shell)
 
     def runForFile(self, filePath):
         pieces = self.parseFile(filePath)
@@ -41,7 +56,11 @@ class OpenFolderCommand(object):
             else:
                 raise RuntimeError('There are not commands configurated')
         else:
-            self.execute(self.file_command['command'], pieces, bool(self.file_command['use_shell']) if 'use_shell' in self.file_command else False)
+            use_shell = False
+            if 'use_shell' in self.file_command:
+                use_shell = bool(self.file_command['use_shell'])
+
+            self.execute(self.file_command['command'], pieces, use_shell)
 
     def parseFolder(self, path):
         return {
@@ -58,11 +77,12 @@ class OpenFolderCommand(object):
         }
 
     def execute(self, cmd, filler, use_shell):
-
         try:
-            cmd_list = [ item.format(**filler) for item in cmd ]
+            cmd_list = [item.format(**filler) for item in cmd]
         except KeyError as err:
-            return sublime.status_message("{0} is not a valid replacement".format(err.args[0]))
+            return sublime.status_message(
+                "{0} is not a valid replacement".format(err.args[0])
+            )
         except Exception as err:
             return sublime.status_message(repr(err))
 
@@ -73,6 +93,7 @@ class OpenFolderCommand(object):
         except Exception as err:
             sublime.status_message(repr(err))
 
+
 class OpenFolderHelper(object):
     @classmethod
     def getCommand(cls, window):
@@ -82,7 +103,13 @@ class OpenFolderHelper(object):
         if classic_cmdline is not None:
             return OpenFolderClassicCommand(window, classic_cmdline)
 
-        return OpenFolderCommand(window, helper.getSetting('folder'), helper.getSetting('file'))
+        return OpenFolderCommand(
+            window, helper.getSetting('folder'), helper.getSetting('file')
+        )
+
+    @classmethod
+    def getPlatformSettingsFilePath(cls):
+        return cls.getSettingsFilePath(sublime.platform().capitalize())
 
     @classmethod
     def getHostSettingsFilePath(cls):
@@ -90,14 +117,20 @@ class OpenFolderHelper(object):
 
     @classmethod
     def getSettingsFilePath(cls, special=None):
-        return "".join(("OpenFolder", " (" + special + ")" if special else "", ".sublime-settings"))
+        special = " (" + special + ")" if special else ""
+        return "".join(("OpenFolder", special, ".sublime-settings"))
 
     def __init__(self):
-        self.host_settings = sublime.load_settings(OpenFolderHelper.getHostSettingsFilePath())
-        self.user_settings = sublime.load_settings(OpenFolderHelper.getSettingsFilePath())
+        self.host_settings = sublime.load_settings(
+            OpenFolderHelper.getHostSettingsFilePath())
+
+        self.user_settings = sublime.load_settings(
+            OpenFolderHelper.getSettingsFilePath())
 
     def getSetting(self, settingName, default=None):
-        return self.host_settings.get(settingName, self.user_settings.get(settingName, default))
+        return self.host_settings.get(
+            settingName, self.user_settings.get(settingName, default))
+
 
 class OpenFolder(sublime_plugin.WindowCommand):
     def run(self, paths):
@@ -136,20 +169,31 @@ class OpenFolder(sublime_plugin.WindowCommand):
 
 
 class OpenFolderOpenSettings(sublime_plugin.WindowCommand):
-    def run(self, scope='default'):
-        if scope == 'host':
-            settingsFile = os.path.join(sublime.packages_path(), 'User', OpenFolderHelper.getHostSettingsFilePath())
-        elif scope == 'user':
-            settingsFile = os.path.join(sublime.packages_path(), 'User', OpenFolderHelper.getSettingsFilePath())
-        elif scope == 'os':
-            settingsFile = os.path.join(sublime.packages_path(), 'Open Folder', OpenFolderHelper.getSettingsFilePath(sublime.platform().capitalize()))
-        else:
-            settingsFile = os.path.join(sublime.packages_path(), 'Open Folder', OpenFolderHelper.getSettingsFilePath())
+    # Allows the opening of Default plugin settings files even if running from
+    # a packaged plugin. Also, adds support for host-specific settings using a
+    # hack on sublime.load_settings().
 
-        self.window.open_file(settingsFile)
+    def run(self, scope='default'):
+        settingsFilePieces = self.getSettingPieces(scope)
+
+        self.window.run_command("open_file", {
+            "file": "${packages}/{0}/{1}" % settingsFilePieces
+        })
+
+    def getSettingPieces(self, scope):
+        if scope == 'host':
+            return ('User/', OpenFolderHelper.getHostSettingsFilePath())
+        elif scope == 'user':
+            return ('User/', OpenFolderHelper.getSettingsFilePath())
+        elif scope == 'os':
+            return (__package__, OpenFolderHelper.getPlatformSettingsFilePath())
+        else:  # default
+            return (__package__, OpenFolderHelper.getSettingsFilePath())
 
 
 class OpenFolderOpenCurrent(sublime_plugin.TextCommand):
     def run(self, edit):
         if self.view.file_name() is not None:
-            self.view.window().run_command('open_folder', {'paths': [self.view.file_name()]})
+            self.view.window().run_command('open_folder', {
+                'paths': [self.view.file_name()]
+            })
